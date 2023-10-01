@@ -7,6 +7,7 @@ from sys import exit
 
 Pyro4.config.SERIALIZERS_ACCEPTED = {'serpent', 'marshal'}
 daemon = Pyro4.Daemon()
+S = threading.Semaphore(1)
 ns = None
 server = None
 name = None
@@ -28,7 +29,7 @@ class Game(tk.Toplevel):
         super().__init__(master)
         self.master = master
         self.window = None
-        self.protocol('WM_DELETE_WINDOW', self.close_game)
+        self.protocol('WM_DELETE_WINDOW', lambda: self.close_game(False))
         self.geometry('400x600')
 
         self.game_screen = tk.Canvas(self, height=600, width=200)
@@ -39,11 +40,13 @@ class Game(tk.Toplevel):
 
         ttk.Label(self.chat_frame, text=f'Usuário: {name}').pack(side='top')
 
+        self.results_label = ttk.Label(self.chat_frame, text='Vitórias: 0\nDerrotas: 0')
+        self.results_label.pack()
+
         self.chat_view = ScrolledText(self.chat_frame, wrap=tk.WORD, height=20, width=50, state='disabled')
         self.chat_view.pack(padx=10, pady=5)
 
-        self.chat_label = tk.Label(self.chat_frame, text='Chat:')
-        self.chat_label.pack(padx=10, pady=5, side='left')
+        ttk.Label(self.chat_frame, text='Chat:').pack(padx=10, pady=5, side='left')
 
         self.entry = tk.Entry(self.chat_frame, width=50)
         self.entry.pack(padx=10, pady=5, side='right')
@@ -66,7 +69,7 @@ class Game(tk.Toplevel):
         self.label = ttk.Label(self, text='', font=("Arial", 10))
         self.label.place(x=50, y=550)
 
-        self.button = ttk.Button(self, text='Desistir', command=self.forfeit)
+        self.button = ttk.Button(self, text='Desistir', command=lambda: self.forfeit(False))
         self.button.place(x=300, y=550)
 
         self.bind('<Button-1>', self.get_mouse)
@@ -78,6 +81,8 @@ class Game(tk.Toplevel):
         self.tab = tab
         self.game_id = game_id
         self.over = False
+        self.vitorias = 0
+        self.derrotas = 0
 
         if self.mark == 'X':
             self.label['text'] = 'Você começa!'
@@ -122,44 +127,63 @@ class Game(tk.Toplevel):
                             self.tab.insert(pos[0], pos[1], pos[2], self.mark)
 
     def fim(self):
+        S.acquire()
         state = self.tab.avalia()
+        S.release()
         if state == 1:
             if self.mark == 'X':
                 self.label['text'] = 'Você venceu!'
+                self.tab.vitoria(name, self.oponent)
             else:
                 self.label['text'] = 'Você perdeu!'
             return True
         if state == -1:
             if self.mark == 'O':
                 self.label['text'] = 'Você venceu!'
+                self.tab.vitoria(name, self.oponent)
             else:
                 self.label['text'] = 'Você perdeu!'
             return True
+        S.acquire()
         if self.tab.tab_cheio():
             self.label['text'] = 'Empate!'
+            S.release()
             return True
+        S.release()
         return False
     
+    def result(self, winner):
+        if winner:
+            self.vitorias += 1
+        if not winner:
+            self.derrotas += 1
+        self.results_label['text'] = f'Vitórias: {self.vitorias}\nDerrotas: {self.derrotas}'
+
     @threaded
     def input_entry(self, event):
         msg = self.entry.get()
         if msg:
+            msg = f'{name}: {msg}'
             self.entry.delete(0, tk.END)
             server.chat(msg, self.game_id)
             self.message(msg)
 
     def message(self, msg):
         self.chat_view['state'] = 'normal'
-        self.chat_view.insert(tk.END, f'{name}: {msg}' + '\n')
+        self.chat_view.insert(tk.END, msg + '\n')
         self.chat_view.see('end')
         self.chat_view['state'] = 'disabled'
 
+    @threaded
     def forfeit(self, other=False):
+        S.acquire()
         if not other:
             self.label['text'] = 'Você perdeu!'
             self.tab.forfeit(self.oponent)
-        else:
+        if other:
             self.label['text'] = 'Oponente desistiu!'
+            self.tab.vitoria(name, self.oponent)
+        S.release()
         self.over = True
         self.button['text'] = 'Rematch'
         self.button['command'] = lambda: self.tab.rematch(self.oponent)
@@ -173,6 +197,7 @@ class Game(tk.Toplevel):
             ttk.Button(self.window, text='Recusar', command=self.close_window).pack(padx=20, pady=10, side='right')
             self.window.protocol('WM_DELETE_WINDOW', self.close_window)
             self.window.grab_set()
+            self.window.focus_force()
 
     @threaded
     def new_game(self, mark):
@@ -193,13 +218,17 @@ class Game(tk.Toplevel):
             self.window.destroy()
             self.window = None
 
+    @threaded
     def close_game(self, other=False):
         try:
             del games[self.game_id]
         except:
             pass
         if not other:
+            print('Tried to close the other')
+            S.acquire()
             self.tab.closed_game(name, self.oponent)
+            S.release()
         self.destroy()
 
 @Pyro4.expose

@@ -1,9 +1,10 @@
 import Pyro4
 import Pyro4.naming
 import threading
-from random import randint
+from random import randint, choices
 from numpy import array
 from copy import deepcopy
+import string
 
 clients = {}
 games = {}
@@ -19,12 +20,16 @@ def start_ns():
     print('Inicializando servidor de nomes...')
     Pyro4.naming.startNSloop()
 
+def id_generator(size):
+    return ''.join(choices(string.ascii_uppercase + string.ascii_lowercase + string.digits, k=size))
+
 @Pyro4.expose
 class Tabuleiro:
     def __init__(self, game_id):
         self._tab = self.gera_tabuleiro()
         self.players = {}
         self.game_id = game_id
+        self.S = threading.Semaphore()
 
     def get_tab(self):
         return self._tab
@@ -45,7 +50,9 @@ class Tabuleiro:
     def insert(self, p1, p2, p3, mark):
         self._tab[p1][p2][p3] = mark
         for player in self.players.values():
+            self.S.acquire()
             player.draw(p1, p2, p3, mark)
+            self.S.release()
 
     def tab_vazio(self):
         for k in range(3):
@@ -62,7 +69,13 @@ class Tabuleiro:
                     if self._tab[k][i][j] == None:
                         return False
         return True
-    
+
+    def vitoria(self, winner, loser):
+        self.S.acquire()
+        self.players[winner].result(True)
+        self.players[loser].result(False)
+        self.S.release()
+
     # Checa se alguem venceu
     def avalia(self):
         visitados = []
@@ -75,7 +88,7 @@ class Tabuleiro:
             for v in vizinhos:
                 if self._tab[v[0]][v[1]][v[2]] == mark:
                     passo = array(v) - array(atual)
-                    next = array(v) + array(passo)
+                    next = array(v) + passo
                     try:
                         if self._tab[next[0]][next[1]][next[2]] == mark:
                             if mark == 'X':
@@ -127,30 +140,38 @@ class Tabuleiro:
                 n.append(n_pos)
         return n
     
-    @threaded
     def restart(self, p1, p2):
         self._tab = self.gera_tabuleiro()
         n = randint(1, 100)
+        self.S.acquire()
         if n > 50:
             self.players[p1].new_game('X')
             self.players[p2].new_game('O')
         else:
             self.players[p1].new_game('O')
             self.players[p2].new_game('X')
+        self.S.release()
 
     @threaded
     def forfeit(self, oponent):
+        self.S.acquire()
         self.players[oponent].forfeit(other=True)
+        self.S.release()
 
     @threaded
     def rematch(self, oponent):
+        self.S.acquire()
         self.players[oponent].receive_rematch()
+        self.S.release()
 
     @threaded
     def closed_game(self, origin, oponent):
+        print(f'Tried to close {oponent}')
+        self.S.acquire()
         oponent_ref = clients[oponent]
         self.players[oponent].close_game(other=True)
         oponent_ref.message(f'{origin} saiu do jogo!')
+        self.S.release()
         try:
             del games[self.game_id]
         except:
@@ -161,6 +182,7 @@ class Client:
 
     name = ''
     client = None
+    S = threading.Semaphore(1)
 
     def start(self, uri):
         global guest_number
@@ -175,12 +197,13 @@ class Client:
     @threaded
     def start_game(self, oponent):
         oponent_ref = clients[oponent]
-        game_id = 'VuV6UYV5uv63V35' # Id estático para exemplo
+        game_id = id_generator(20)
         tab = Tabuleiro(game_id)
         daemon.register(tab)
         self.client.message(f'Iniciando jogo com {oponent}...', cls=True)
         oponent_ref.message(f'Iniciando jogo com {self.name}...', cls=True)
         n = randint(1, 100)
+        self.S.acquire()
         if n > 50:
             player1 = self.client.start_game(oponent, 'X', tab, game_id)
             player2 = oponent_ref.start_game(self.name, 'O', tab, game_id)
@@ -191,6 +214,7 @@ class Client:
             player2 = oponent_ref.start_game(self.name, 'X', tab, game_id)
             tab.players[oponent] = player1
             tab.players[self.name] = player2
+        self.S.release()
         games[game_id] = [tab, self.name, oponent]
 
     def chat(self, msg, game_id):
@@ -218,7 +242,6 @@ class Client:
             self.client.message('Este nome já existe!', cls=True)
             return False
         
-    @threaded
     def send_invite(self, target):
         if target:
             if target == self.name:
@@ -230,7 +253,6 @@ class Client:
             except:
                 self.client.message(f'{target} não existe!')
 
-    @threaded
     def refuse(self, target):
         if target:
             try:
