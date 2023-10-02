@@ -9,6 +9,7 @@ import string
 clients = {}
 games = {}
 guest_number = 0
+S = threading.Semaphore(1)
 
 def threaded(func):
     def wrapper(*args, **kwargs):
@@ -29,7 +30,6 @@ class Tabuleiro:
         self._tab = self.gera_tabuleiro()
         self.players = {}
         self.game_id = game_id
-        self.S = threading.Semaphore()
 
     def get_tab(self):
         return self._tab
@@ -47,12 +47,14 @@ class Tabuleiro:
     def pos_mark(self):
         return [[k,i,j] for k in range(3) for i in range(3) for j in range(3) if self._tab[k][i][j] != None]
     
+    @threaded
     def insert(self, p1, p2, p3, mark):
         self._tab[p1][p2][p3] = mark
+        self.avalia()
         for player in self.players.values():
-            self.S.acquire()
+            S.acquire()
             player.draw(p1, p2, p3, mark)
-            self.S.release()
+            S.release()
 
     def tab_vazio(self):
         for k in range(3):
@@ -70,13 +72,15 @@ class Tabuleiro:
                         return False
         return True
 
+    @threaded
     def vitoria(self, winner, loser):
-        self.S.acquire()
+        S.acquire()
         self.players[winner].result(True)
         self.players[loser].result(False)
-        self.S.release()
+        S.release()
 
     # Checa se alguem venceu
+    @threaded
     def avalia(self):
         visitados = []
         for pos in self.pos_mark():
@@ -91,13 +95,17 @@ class Tabuleiro:
                     next = array(v) + passo
                     try:
                         if self._tab[next[0]][next[1]][next[2]] == mark:
-                            if mark == 'X':
-                                return 1
-                            elif mark == 'O':
-                                return -1
+                            winner = mark
+                            for player in self.players.values():
+                                S.acquire()
+                                player.fim(winner)
+                                S.release()
+                            return
                     except:
                         continue
-        return 0
+            if self.tab_cheio():
+                for player in self.players.values():
+                    player.fim(None)
 
     # Algoritimo para criar uma lista de possiveis vetores de n dimenções com tamanho definido 
     # Exemplo: (1, 0, 0) <- primeiro vetor de 3 dimenções com tamanho 1
@@ -140,38 +148,38 @@ class Tabuleiro:
                 n.append(n_pos)
         return n
     
+    @threaded
     def restart(self, p1, p2):
         self._tab = self.gera_tabuleiro()
         n = randint(1, 100)
-        self.S.acquire()
+        S.acquire()
         if n > 50:
             self.players[p1].new_game('X')
             self.players[p2].new_game('O')
         else:
             self.players[p1].new_game('O')
             self.players[p2].new_game('X')
-        self.S.release()
+        S.release()
 
     @threaded
     def forfeit(self, oponent):
-        self.S.acquire()
+        S.acquire()
         self.players[oponent].forfeit(other=True)
-        self.S.release()
+        S.release()
 
     @threaded
     def rematch(self, oponent):
-        self.S.acquire()
+        S.acquire()
         self.players[oponent].receive_rematch()
-        self.S.release()
+        S.release()
 
     @threaded
     def closed_game(self, origin, oponent):
-        print(f'Tried to close {oponent}')
-        self.S.acquire()
+        S.acquire()
         oponent_ref = clients[oponent]
         self.players[oponent].close_game(other=True)
         oponent_ref.message(f'{origin} saiu do jogo!')
-        self.S.release()
+        S.release()
         try:
             del games[self.game_id]
         except:
@@ -182,7 +190,6 @@ class Client:
 
     name = ''
     client = None
-    S = threading.Semaphore(1)
 
     def start(self, uri):
         global guest_number
@@ -203,7 +210,7 @@ class Client:
         self.client.message(f'Iniciando jogo com {oponent}...', cls=True)
         oponent_ref.message(f'Iniciando jogo com {self.name}...', cls=True)
         n = randint(1, 100)
-        self.S.acquire()
+        S.acquire()
         if n > 50:
             player1 = self.client.start_game(oponent, 'X', tab, game_id)
             player2 = oponent_ref.start_game(self.name, 'O', tab, game_id)
@@ -212,9 +219,9 @@ class Client:
         else:
             player1 = self.client.start_game(oponent, 'O', tab, game_id)
             player2 = oponent_ref.start_game(self.name, 'X', tab, game_id)
-            tab.players[oponent] = player1
-            tab.players[self.name] = player2
-        self.S.release()
+            tab.players[self.name] = player1
+            tab.players[oponent] = player2
+        S.release()
         games[game_id] = [tab, self.name, oponent]
 
     def chat(self, msg, game_id):
