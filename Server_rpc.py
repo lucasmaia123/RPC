@@ -19,7 +19,7 @@ def threaded(func):
 @threaded
 def start_ns():
     print('Inicializando servidor de nomes...')
-    Pyro4.naming.startNSloop()
+    Pyro4.naming.startNSloop(host='localhost', port=9090)
 
 def id_generator(size):
     return ''.join(choices(string.ascii_uppercase + string.ascii_lowercase + string.digits, k=size))
@@ -222,6 +222,7 @@ class Client:
             tab.players[self.name] = player1
             tab.players[oponent] = player2
         S.release()
+        print(f'{self.name} iniciou um jogo com {oponent}\nGame id: {game_id}')
         games[game_id] = [tab, self.name, oponent]
 
     def chat(self, msg, game_id):
@@ -276,7 +277,7 @@ class Client:
 
 
 start_ns()
-daemon = Pyro4.Daemon()
+daemon = Pyro4.Daemon(host='localhost', port=8080)
 uri = daemon.register(Client)
 ns = Pyro4.locateNS()
 ns.register('Server', uri)

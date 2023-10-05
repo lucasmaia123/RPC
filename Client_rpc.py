@@ -185,7 +185,10 @@ class Game(tk.Toplevel):
             ttk.Button(self.window, text='Aceitar', command=lambda: [self.tab.restart(name, self.oponent), self.close_window()]).pack(padx=20, pady=10, side='left')
             ttk.Button(self.window, text='Recusar', command=self.close_window).pack(padx=20, pady=10, side='right')
             self.window.protocol('WM_DELETE_WINDOW', self.close_window)
-            self.window.focus_set()
+            self.window.lift()
+            self.window.attributes('-topmost', True)
+            self.window.focus_force()
+            self.window.attributes('-topmost', False)
 
     def new_game(self, mark):
         self.game_screen.delete('game')
@@ -231,13 +234,13 @@ class Menu(tk.Frame):
 
         self.buttons = [None, None, None, None]
         self.buttons[0] = ttk.Button(self, text='Iniciar Jogo')
-        self.buttons[0].pack(padx=10)
+        self.buttons[0].pack(pady=5)
         self.buttons[1] = ttk.Button(self, text='Listar usuários')
-        self.buttons[1].pack(padx=10)
+        self.buttons[1].pack(pady=5)
         self.buttons[2] = ttk.Button(self, text='Mudar nome')
-        self.buttons[2].pack(padx=10)
+        self.buttons[2].pack(pady=5)
         self.buttons[3] = ttk.Button(self, text='Sair')
-        self.buttons[3].pack(padx=10)
+        self.buttons[3].pack(pady=5)
 
         try:
             ns = Pyro4.locateNS()
@@ -250,9 +253,8 @@ class Menu(tk.Frame):
     def login(self):
         global name, server
         uri = daemon.register(self)
-        self.message('Logando no servidor...')
         try:
-            server = Pyro4.Proxy('PYRONAME:Server') # Inicia um protocolo de comunicação unidirecinal com o servidor
+            server = Pyro4.Proxy(ns.lookup('Server')) # cria um protocolo de comunicação unidirecinal com o servidor
         except:
             self.message('Servidor não encontrado!')
             return
@@ -313,17 +315,24 @@ class Menu(tk.Frame):
             ttk.Label(self.window, text='Usuários disponíveis:').pack()
             listBox = tk.Listbox(self.window, width=50, height=10)
             listBox.pack()
-            ttk.Button(self.window, text='Convidar', command=lambda: [server.send_invite(listBox.get(listBox.curselection()[0])), self.close_window()]).pack()
-            listBox.bind('<Return>', lambda event: [self.send_invite_event(listBox.get(listBox.curselection()[0]), event), self.close_window()])
+            ttk.Button(self.window, text='Convidar', command=lambda: self.send_invite(listBox)).pack()
+            listBox.bind('<Double-Button-1>', lambda event: self.send_invite(listBox, event))
             for client in list(ns.list().keys())[2:]:
                 if client != name:
                     listBox.insert(tk.END, client)
         else:
             self.window.focus_force()
 
-    def send_invite_event(self, target, event):
-        server.send_invite(target)
-
+    def send_invite(self, list_box, event=None):
+        if list_box.curselection():
+            target = list_box.get(list_box.curselection()[0])
+            for game in games.values():
+                if game.oponent == target:
+                    self.message(f'Você já está em um jogo com {target}')
+                    return
+            server.send_invite(target)
+            self.close_window()
+        
     @threaded
     def receive_invite(self, origin):
         if not self.window:
@@ -331,7 +340,10 @@ class Menu(tk.Frame):
             ttk.Label(self.window, text=f'{origin} está o convidando para uma partida!').pack()
             ttk.Button(self.window, text='Aceitar', command=lambda: [server.start_game(origin), self.close_window()]).pack(padx=20, pady=10, side='left')
             ttk.Button(self.window, text='Recusar', command=lambda: [server.refuse(origin), self.close_window()]).pack(padx=20, pady=10, side='right')
-            self.window.focus_set()
+            self.window.lift()
+            self.window.attributes('-topmost', True)
+            self.window.focus_force()
+            self.window.attributes('-topmost', False)
 
     def accept_name(self, event=None):
         global name
